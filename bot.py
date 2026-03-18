@@ -6,7 +6,6 @@ from datetime import datetime, date
 from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 import os
 import logging
-from dotenv import load_dotenv
 
 # إعداد السجلات لتحري الأخطاء
 logging.basicConfig(level=logging.INFO)
