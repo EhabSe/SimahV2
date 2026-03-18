@@ -25,7 +25,6 @@ user_temp_data = {}
 # DATABASE
 # =====================
 def init_db():
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
@@ -59,7 +58,6 @@ def init_db():
 # HELPERS
 # =====================
 def get_user_name(tid):
-
     if tid == HR_ADMIN_ID:
         return "المدير"
 
@@ -78,15 +76,12 @@ def get_user_name(tid):
 
 
 def ensure_session(chat_id):
-
     if chat_id not in user_temp_data:
-
         name = get_user_name(chat_id)
-
         if name:
-            user_temp_data[chat_id] = {
-                "name": name
-            }
+            user_temp_data[chat_id] = {"name": name}
+        else:
+            user_temp_data[chat_id] = {}
 
 # =====================
 # START
@@ -141,15 +136,42 @@ def admin_panel(message):
     )
 
 # =====================
-# CALLBACK
+# CALLBACK (FIXED)
 # =====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
 
     chat_id = call.message.chat.id
-
     ensure_session(chat_id)
 
+    # ===== FIX CALENDAR =====
+    result, key, step = DetailedTelegramCalendar(
+        min_date=date.today()
+    ).process(call.data)
+
+    if not result and key:
+        bot.edit_message_text(
+            f"اختر {step}",
+            chat_id,
+            call.message.message_id,
+            reply_markup=key
+        )
+        return
+
+    elif result:
+        user_temp_data[chat_id]["date"] = str(result)
+
+        bot.edit_message_text(
+            f"تم اختيار التاريخ: {result}",
+            chat_id,
+            call.message.message_id
+        )
+
+        msg = bot.send_message(chat_id, "اكتب سبب الإجازة")
+        bot.register_next_step_handler(msg, save_reason)
+        return
+
+    # ===== باقي الأزرار =====
     if call.data == "add_emp":
 
         msg = bot.send_message(chat_id, "أرسل اسم الموظف")
@@ -186,7 +208,6 @@ def callback_handler(call):
     elif call.data.startswith("type_"):
 
         user_temp_data[chat_id]["leave_type"] = call.data.split("_")[1]
-
         show_duration(call.message)
 
     elif call.data.startswith("dur_"):
@@ -205,323 +226,158 @@ def callback_handler(call):
         )
 
 # =====================
-# EMPLOYEE MANAGEMENT
+# SAVE REQUEST
 # =====================
-def show_employees(chat_id):
+def save_reason(message):
+
+    chat_id = message.chat.id
+    user_temp_data[chat_id]["reason"] = message.text
+
+    data = user_temp_data[chat_id]
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id,name FROM employees")
+    cursor.execute("""
+    INSERT INTO leaves(
+        emp_name,
+        emp_id,
+        type,
+        duration,
+        date,
+        time,
+        reason,
+        status,
+        timestamp
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        data.get("name"),
+        chat_id,
+        data.get("leave_type"),
+        data.get("duration"),
+        data.get("date"),
+        datetime.now().strftime("%H:%M"),
+        data.get("reason"),
+        "انتظار",
+        datetime.now().strftime("%Y-%m-%d %H:%M")
+    ))
 
+    conn.commit()
+    conn.close()
+
+    bot.send_message(chat_id, "✅ تم إرسال الطلب")
+
+    bot.send_message(
+        HR_ADMIN_ID,
+        f"طلب جديد:\n{data.get('name')} | {data.get('leave_type')} | {data.get('date')}"
+    )
+
+# =====================
+# OTHER FUNCTIONS
+# =====================
+def show_employees(chat_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id,name FROM employees")
     rows = cursor.fetchall()
     conn.close()
 
-    if not rows:
-        bot.send_message(chat_id, "لا يوجد موظفين")
-        return
-
     for r in rows:
-
         markup = types.InlineKeyboardMarkup()
-
         markup.add(
             types.InlineKeyboardButton("📜 الإجازات", callback_data=f"emp_history_{r[0]}"),
             types.InlineKeyboardButton("✏ تعديل", callback_data=f"edit_emp_{r[0]}"),
             types.InlineKeyboardButton("❌ حذف", callback_data=f"del_emp_{r[0]}")
         )
 
-        bot.send_message(
-            chat_id,
-            f"الموظف: {r[1]}",
-            reply_markup=markup
-        )
-
+        bot.send_message(chat_id, f"الموظف: {r[1]}", reply_markup=markup)
 
 def delete_employee(call):
-
     emp_id = call.data.split("_")[2]
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(
-        "DELETE FROM employees WHERE id=?",
-        (emp_id,)
-    )
-
+    cursor.execute("DELETE FROM employees WHERE id=?", (emp_id,))
     conn.commit()
     conn.close()
-
     bot.send_message(call.message.chat.id, "تم حذف الموظف")
 
-
 def ask_new_name(call):
-
     emp_id = call.data.split("_")[2]
-
     msg = bot.send_message(call.message.chat.id, "أرسل الاسم الجديد")
-
-    bot.register_next_step_handler(
-        msg,
-        update_employee_name,
-        emp_id
-    )
-
+    bot.register_next_step_handler(msg, update_employee_name, emp_id)
 
 def update_employee_name(message, emp_id):
-
-    name = message.text
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(
-        "UPDATE employees SET name=? WHERE id=?",
-        (name, emp_id)
-    )
-
+    cursor.execute("UPDATE employees SET name=? WHERE id=?", (message.text, emp_id))
     conn.commit()
     conn.close()
-
     bot.send_message(message.chat.id, "تم التعديل")
 
-# =====================
-# EMPLOYEE HISTORY
-# =====================
 def show_employee_history(call):
-
     emp_id = call.data.split("_")[2]
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT emp_name,type,date,status FROM leaves WHERE emp_id=?",
-        (emp_id,)
-    )
-
+    cursor.execute("SELECT emp_name,type,date,status FROM leaves WHERE emp_id=?", (emp_id,))
     rows = cursor.fetchall()
     conn.close()
 
-    if not rows:
-        bot.send_message(call.message.chat.id, "لا يوجد إجازات")
-        return
+    text = "\n".join([f"{r[0]} | {r[1]} | {r[2]} | {r[3]}" for r in rows])
+    bot.send_message(call.message.chat.id, text if text else "لا يوجد")
 
-    text = ""
-
-    for r in rows:
-
-        text += f"{r[0]} | {r[1]} | {r[2]} | {r[3]}\n"
-
-    bot.send_message(call.message.chat.id, text)
-
-# =====================
-# ALL LEAVES
-# =====================
 def show_all_leaves(chat_id):
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT emp_name,type,date,status FROM leaves ORDER BY id DESC"
-    )
-
+    cursor.execute("SELECT emp_name,type,date,status FROM leaves")
     rows = cursor.fetchall()
     conn.close()
 
-    if not rows:
-        bot.send_message(chat_id, "لا يوجد سجل")
-        return
+    text = "\n".join([f"{r[0]} | {r[1]} | {r[2]} | {r[3]}" for r in rows])
+    bot.send_message(chat_id, text if text else "لا يوجد")
 
-    text = ""
-
-    for r in rows:
-
-        text += f"{r[0]} | {r[1]} | {r[2]} | {r[3]}\n"
-
-    bot.send_message(chat_id, text)
-
-# =====================
-# ADD EMPLOYEE
-# =====================
-def ask_emp_id(message):
-
-    name = message.text
-
-    msg = bot.send_message(message.chat.id, "أرسل Telegram ID")
-
-    bot.register_next_step_handler(
-        msg,
-        save_employee,
-        name
-    )
-
-
-def save_employee(message, name):
-
-    try:
-        tid = int(message.text)
-    except:
-        bot.send_message(message.chat.id, "الآيدي يجب أن يكون رقم")
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    try:
-
-        cursor.execute(
-            "INSERT INTO employees(name,telegram_id) VALUES(?,?)",
-            (name, tid)
-        )
-
-        conn.commit()
-
-        bot.send_message(message.chat.id, "تمت الإضافة")
-
-    except:
-
-        bot.send_message(message.chat.id, "الموظف موجود")
-
-    conn.close()
-
-# =====================
-# LEAVE REQUEST
-# =====================
-def show_leave_types(message):
-
-    markup = types.InlineKeyboardMarkup()
-
-    types_list = ["إدارية", "مرضية", "غير مدفوعة", "زواج", "حج"]
-
-    btns = [
-        types.InlineKeyboardButton(
-            t,
-            callback_data=f"type_{t}"
-        )
-        for t in types_list
-    ]
-
-    markup.add(*btns)
-
-    bot.send_message(
-        message.chat.id,
-        "اختر النوع",
-        reply_markup=markup
-    )
-
-
-def show_duration(message):
-
-    markup = types.InlineKeyboardMarkup()
-
-    markup.add(
-        types.InlineKeyboardButton("ساعية", callback_data="dur_ساعية"),
-        types.InlineKeyboardButton("يومية", callback_data="dur_يومية")
-    )
-
-    bot.edit_message_text(
-        "المدة",
-        message.chat.id,
-        message.message_id,
-        reply_markup=markup
-    )
-
-# =====================
-# PENDING
-# =====================
 def show_pending():
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT id,emp_name,type,date,emp_id FROM leaves WHERE status='انتظار'"
-    )
-
+    cursor.execute("SELECT emp_name,type,date FROM leaves WHERE status='انتظار'")
     rows = cursor.fetchall()
     conn.close()
 
     for r in rows:
+        bot.send_message(HR_ADMIN_ID, f"{r[0]} | {r[1]} | {r[2]}")
 
-        markup = types.InlineKeyboardMarkup()
-
-        markup.add(
-            types.InlineKeyboardButton(
-                "✅ موافقة",
-                callback_data=f"approve_{r[0]}_{r[4]}"
-            ),
-            types.InlineKeyboardButton(
-                "❌ رفض",
-                callback_data=f"reject_{r[0]}_{r[4]}"
-            )
-        )
-
-        bot.send_message(
-            HR_ADMIN_ID,
-            f"{r[1]} | {r[2]} | {r[3]}",
-            reply_markup=markup
-        )
-
-# =====================
-# EXPORT
-# =====================
 def export_excel():
-
     conn = sqlite3.connect(DB_PATH)
-
-    df = pd.read_sql_query(
-        "SELECT * FROM leaves",
-        conn
-    )
-
+    df = pd.read_sql_query("SELECT * FROM leaves", conn)
     conn.close()
 
     path = "report.xlsx"
-
     df.to_excel(path, index=False)
 
     with open(path, "rb") as f:
         bot.send_document(HR_ADMIN_ID, f)
 
-# =====================
-# USER ACTIONS
-# =====================
 @bot.message_handler(func=lambda m: m.text == "📝 تقديم طلب إجازة")
 def leave_request(message):
     show_leave_types(message)
 
-@bot.message_handler(func=lambda m: m.text == "📜 سجل إجازاتي")
-def history(message):
+def show_leave_types(message):
+    markup = types.InlineKeyboardMarkup()
+    types_list = ["إدارية", "مرضية", "غير مدفوعة"]
+    markup.add(*[types.InlineKeyboardButton(t, callback_data=f"type_{t}") for t in types_list])
+    bot.send_message(message.chat.id, "اختر النوع", reply_markup=markup)
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT type,date,status FROM leaves WHERE emp_id=?",
-        (message.chat.id,)
+def show_duration(message):
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("ساعية", callback_data="dur_ساعية"),
+        types.InlineKeyboardButton("يومية", callback_data="dur_يومية")
     )
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    text = ""
-
-    for r in rows:
-
-        text += f"{r[1]} | {r[0]} | {r[2]}\n"
-
-    bot.send_message(message.chat.id, text if text else "لا يوجد سجل")
+    bot.edit_message_text("المدة", message.chat.id, message.message_id, reply_markup=markup)
 
 # =====================
 # RUN
 # =====================
 if __name__ == "__main__":
-
     init_db()
-
     print("البوت يعمل")
-
     bot.infinity_polling(skip_pending=True)
