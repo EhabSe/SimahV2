@@ -5,13 +5,16 @@ import pandas as pd
 from datetime import datetime
 from telegram_bot_calendar import DetailedTelegramCalendar, LSTEP
 import os
+import logging
 from dotenv import load_dotenv
 
 # --- Security & Core Settings ---
 logging.basicConfig(level=logging.INFO)
+load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+# FIXED: Changed variable name to match the rest of the code
+HR_ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
