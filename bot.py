@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 
 # --- Security & Core Settings ---
 load_dotenv()
-TOKEN = os.getenv("BOT_TOKEN")
-HR_ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 bot = telebot.TeleBot(TOKEN)
 
