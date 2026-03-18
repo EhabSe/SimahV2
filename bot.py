@@ -124,6 +124,7 @@ def admin_panel(message):
     markup.add(
         types.InlineKeyboardButton("➕ إضافة موظف", callback_data="add_emp"),
         types.InlineKeyboardButton("👥 إدارة الموظفين", callback_data="manage_emp"),
+        types.InlineKeyboardButton("⏳ الطلبات المعلقة", callback_data="pending"),
         types.InlineKeyboardButton("📜 سجل الإجازات", callback_data="all_leaves"),
         types.InlineKeyboardButton("📊 تصدير Excel", callback_data="export")
     )
@@ -135,7 +136,7 @@ def admin_panel(message):
     )
 
 # =====================
-# CALLBACK HANDLER
+# CALLBACK (FIXED)
 # =====================
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -143,39 +144,34 @@ def callback_handler(call):
     chat_id = call.message.chat.id
     ensure_session(chat_id)
 
-    # =====================
-    # FIX CALENDAR (IMPORTANT)
-    # =====================
-    if call.data.startswith("DAY") or call.data.startswith("MONTH") or call.data.startswith("YEAR"):
+    # ===== FIX CALENDAR =====
+    result, key, step = DetailedTelegramCalendar(
+        min_date=date.today()
+    ).process(call.data)
 
-        calendar = DetailedTelegramCalendar(min_date=date.today())
-        result, key, step = calendar.process(call.data)
+    if not result and key:
+        bot.edit_message_text(
+            f"اختر {step}",
+            chat_id,
+            call.message.message_id,
+            reply_markup=key
+        )
+        return
 
-        if not result and key:
-            bot.edit_message_text(
-                f"اختر {step}",
-                chat_id,
-                call.message.message_id,
-                reply_markup=key
-            )
-            return
+    elif result:
+        user_temp_data[chat_id]["date"] = str(result)
 
-        elif result:
-            user_temp_data[chat_id]["date"] = str(result)
+        bot.edit_message_text(
+            f"تم اختيار التاريخ: {result}",
+            chat_id,
+            call.message.message_id
+        )
 
-            bot.edit_message_text(
-                f"✅ تم اختيار التاريخ: {result}",
-                chat_id,
-                call.message.message_id
-            )
+        msg = bot.send_message(chat_id, "اكتب سبب الإجازة")
+        bot.register_next_step_handler(msg, save_reason)
+        return
 
-            msg = bot.send_message(chat_id, "✏️ اكتب سبب الإجازة")
-            bot.register_next_step_handler(msg, save_reason)
-            return
-
-    # =====================
-    # NORMAL CALLBACKS
-    # =====================
+    # ===== باقي الأزرار =====
     if call.data == "add_emp":
 
         msg = bot.send_message(chat_id, "أرسل اسم الموظف")
@@ -193,6 +189,10 @@ def callback_handler(call):
 
         ask_new_name(call)
 
+    elif call.data == "pending":
+
+        show_pending()
+
     elif call.data == "all_leaves":
 
         show_all_leaves(chat_id)
@@ -200,6 +200,10 @@ def callback_handler(call):
     elif call.data == "export":
 
         export_excel()
+
+    elif call.data.startswith("emp_history_"):
+
+        show_employee_history(call)
 
     elif call.data.startswith("type_"):
 
@@ -215,7 +219,7 @@ def callback_handler(call):
         ).build()
 
         bot.edit_message_text(
-            "📅 اختر التاريخ",
+            "اختر التاريخ",
             chat_id,
             call.message.message_id,
             reply_markup=calendar
@@ -261,15 +265,15 @@ def save_reason(message):
     conn.commit()
     conn.close()
 
-    bot.send_message(chat_id, "✅ تم إرسال الطلب بنجاح")
+    bot.send_message(chat_id, "✅ تم إرسال الطلب")
 
     bot.send_message(
         HR_ADMIN_ID,
-        f"📢 طلب جديد:\n{data.get('name')} | {data.get('leave_type')} | {data.get('date')}"
+        f"طلب جديد:\n{data.get('name')} | {data.get('leave_type')} | {data.get('date')}"
     )
 
 # =====================
-# EMPLOYEE MANAGEMENT
+# OTHER FUNCTIONS
 # =====================
 def show_employees(chat_id):
     conn = sqlite3.connect(DB_PATH)
@@ -281,10 +285,12 @@ def show_employees(chat_id):
     for r in rows:
         markup = types.InlineKeyboardMarkup()
         markup.add(
+            types.InlineKeyboardButton("📜 الإجازات", callback_data=f"emp_history_{r[0]}"),
             types.InlineKeyboardButton("✏ تعديل", callback_data=f"edit_emp_{r[0]}"),
             types.InlineKeyboardButton("❌ حذف", callback_data=f"del_emp_{r[0]}")
         )
-        bot.send_message(chat_id, f"👤 {r[1]}", reply_markup=markup)
+
+        bot.send_message(chat_id, f"الموظف: {r[1]}", reply_markup=markup)
 
 def delete_employee(call):
     emp_id = call.data.split("_")[2]
@@ -293,7 +299,7 @@ def delete_employee(call):
     cursor.execute("DELETE FROM employees WHERE id=?", (emp_id,))
     conn.commit()
     conn.close()
-    bot.send_message(call.message.chat.id, "تم الحذف")
+    bot.send_message(call.message.chat.id, "تم حذف الموظف")
 
 def ask_new_name(call):
     emp_id = call.data.split("_")[2]
@@ -308,9 +314,17 @@ def update_employee_name(message, emp_id):
     conn.close()
     bot.send_message(message.chat.id, "تم التعديل")
 
-# =====================
-# LEAVES
-# =====================
+def show_employee_history(call):
+    emp_id = call.data.split("_")[2]
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT emp_name,type,date,status FROM leaves WHERE emp_id=?", (emp_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    text = "\n".join([f"{r[0]} | {r[1]} | {r[2]} | {r[3]}" for r in rows])
+    bot.send_message(call.message.chat.id, text if text else "لا يوجد")
+
 def show_all_leaves(chat_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -319,7 +333,17 @@ def show_all_leaves(chat_id):
     conn.close()
 
     text = "\n".join([f"{r[0]} | {r[1]} | {r[2]} | {r[3]}" for r in rows])
-    bot.send_message(chat_id, text if text else "لا يوجد بيانات")
+    bot.send_message(chat_id, text if text else "لا يوجد")
+
+def show_pending():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT emp_name,type,date FROM leaves WHERE status='انتظار'")
+    rows = cursor.fetchall()
+    conn.close()
+
+    for r in rows:
+        bot.send_message(HR_ADMIN_ID, f"{r[0]} | {r[1]} | {r[2]}")
 
 def export_excel():
     conn = sqlite3.connect(DB_PATH)
@@ -332,9 +356,6 @@ def export_excel():
     with open(path, "rb") as f:
         bot.send_document(HR_ADMIN_ID, f)
 
-# =====================
-# USER ACTIONS
-# =====================
 @bot.message_handler(func=lambda m: m.text == "📝 تقديم طلب إجازة")
 def leave_request(message):
     show_leave_types(message)
@@ -342,13 +363,8 @@ def leave_request(message):
 def show_leave_types(message):
     markup = types.InlineKeyboardMarkup()
     types_list = ["إدارية", "مرضية", "غير مدفوعة"]
-
-    markup.add(*[
-        types.InlineKeyboardButton(t, callback_data=f"type_{t}")
-        for t in types_list
-    ])
-
-    bot.send_message(message.chat.id, "اختر نوع الإجازة", reply_markup=markup)
+    markup.add(*[types.InlineKeyboardButton(t, callback_data=f"type_{t}") for t in types_list])
+    bot.send_message(message.chat.id, "اختر النوع", reply_markup=markup)
 
 def show_duration(message):
     markup = types.InlineKeyboardMarkup()
@@ -356,13 +372,7 @@ def show_duration(message):
         types.InlineKeyboardButton("ساعية", callback_data="dur_ساعية"),
         types.InlineKeyboardButton("يومية", callback_data="dur_يومية")
     )
-
-    bot.edit_message_text(
-        "اختر المدة",
-        message.chat.id,
-        message.message_id,
-        reply_markup=markup
-    )
+    bot.edit_message_text("المدة", message.chat.id, message.message_id, reply_markup=markup)
 
 # =====================
 # RUN
