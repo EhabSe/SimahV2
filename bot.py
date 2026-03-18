@@ -8,11 +8,12 @@ import os
 from dotenv import load_dotenv
 
 # --- Security & Core Settings ---
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-bot = telebot.TeleBot(TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN)
 
 # Dictionary to store temporary user sessions during the leave request process
 user_sessions = {}
