@@ -26,7 +26,6 @@ except:
 
 bot = telebot.TeleBot(TOKEN)
 
-# Railway persistent storage
 DB_PATH = "/data/hr_system.db" if os.path.exists("/data") else "hr_system.db"
 
 user_temp_data = {}
@@ -127,9 +126,40 @@ def admin_panel(message):
 
 
 # =====================
-# CALLBACK HANDLER (FIXED)
+# APPROVE / REJECT (FIXED)
 # =====================
-@bot.callback_query_handler(func=lambda call: not DetailedTelegramCalendar.func()(call))
+@bot.callback_query_handler(func=lambda call: call.data.startswith("approve_") or call.data.startswith("reject_"))
+def handle_approval(call):
+    try:
+        action, leave_id, emp_id = call.data.split("_")
+
+        status = "مقبول" if action == "approve" else "مرفوض"
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "UPDATE leaves SET status=? WHERE id=?",
+            (status, leave_id)
+        )
+
+        conn.commit()
+        conn.close()
+
+        bot.send_message(call.message.chat.id, f"تم {status}")
+        bot.send_message(int(emp_id), f"تم {status} طلبك")
+
+    except Exception:
+        logging.exception("Approval Error")
+        bot.send_message(call.message.chat.id, "حدث خطأ")
+
+
+# =====================
+# CALLBACK HANDLER
+# =====================
+@bot.callback_query_handler(func=lambda call: not DetailedTelegramCalendar.func()(call)
+                             and not call.data.startswith("approve_")
+                             and not call.data.startswith("reject_"))
 def callback_handler(call):
     chat_id = call.message.chat.id
     ensure_session(chat_id)
@@ -160,11 +190,11 @@ def callback_handler(call):
             show_duration(call.message)
 
         elif call.data.startswith("dur_"):
-            user_temp_data[chat_id]["duration"] = call.data.split("_", 1)[1]
+            duration = call.data.split("_", 1)[1]
+            user_temp_data[chat_id]["duration"] = duration
+            logging.info(f"{chat_id} selected duration: {duration}")
 
-            calendar, _ = DetailedTelegramCalendar(
-                min_date=date.today()
-            ).build()
+            calendar, _ = DetailedTelegramCalendar(min_date=date.today()).build()
 
             try:
                 bot.edit_message_text(
@@ -182,16 +212,14 @@ def callback_handler(call):
 
 
 # =====================
-# CALENDAR HANDLER (CRITICAL FIX)
+# CALENDAR HANDLER
 # =====================
 @bot.callback_query_handler(func=DetailedTelegramCalendar.func())
 def calendar_handler(call):
     chat_id = call.message.chat.id
 
     try:
-        result, key, step = DetailedTelegramCalendar(
-            min_date=date.today()
-        ).process(call.data)
+        result, key, step = DetailedTelegramCalendar(min_date=date.today()).process(call.data)
 
         if not result and key:
             bot.edit_message_text(
@@ -254,12 +282,18 @@ def save_leave_request(message):
 
     bot.send_message(
         HR_ADMIN_ID,
-        f"طلب جديد:\n{data.get('name')} | {data.get('leave_type')} | {data.get('date')}"
+        f"""طلب جديد:
+👤 الموظف: {data.get('name')}
+📌 النوع: {data.get('leave_type')}
+⏱ المدة: {data.get('duration')}
+📅 التاريخ: {data.get('date')}
+📝 السبب: {reason}
+"""
     )
 
 
 # =====================
-# ADD EMPLOYEE (FIXED)
+# EMPLOYEE MANAGEMENT
 # =====================
 def ask_emp_id(message):
     name = message.text
@@ -289,9 +323,6 @@ def save_employee(message, name):
         bot.send_message(message.chat.id, "خطأ في الإدخال")
 
 
-# =====================
-# OTHER FUNCTIONS
-# =====================
 def show_employees(chat_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -320,11 +351,17 @@ def delete_employee(call):
     bot.send_message(call.message.chat.id, "تم حذف الموظف")
 
 
+# =====================
+# LEAVES
+# =====================
 def show_pending():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id,emp_name,type,date,emp_id FROM leaves WHERE status='انتظار'")
+    cursor.execute("""
+    SELECT id,emp_name,type,date,emp_id,reason,duration 
+    FROM leaves WHERE status='انتظار'
+    """)
     rows = cursor.fetchall()
     conn.close()
 
@@ -334,7 +371,16 @@ def show_pending():
             types.InlineKeyboardButton("✅ موافقة", callback_data=f"approve_{r[0]}_{r[4]}"),
             types.InlineKeyboardButton("❌ رفض", callback_data=f"reject_{r[0]}_{r[4]}")
         )
-        bot.send_message(HR_ADMIN_ID, f"{r[1]} | {r[2]} | {r[3]}", reply_markup=markup)
+
+        bot.send_message(
+            HR_ADMIN_ID,
+            f"""👤 {r[1]}
+📌 {r[2]}
+⏱ {r[6]}
+📅 {r[3]}
+📝 {r[5]}""",
+            reply_markup=markup
+        )
 
 
 def show_all_leaves(chat_id):
@@ -359,10 +405,16 @@ def export_excel():
 
 
 # =====================
-# USER FLOW
+# USER FLOW (FIXED SESSION RESET)
 # =====================
 @bot.message_handler(func=lambda m: m.text == "📝 تقديم طلب إجازة")
 def leave_request(message):
+    chat_id = message.chat.id
+
+    user_temp_data[chat_id] = {
+        "name": get_user_name(chat_id)
+    }
+
     markup = types.InlineKeyboardMarkup()
     types_list = ["إدارية", "مرضية", "غير مدفوعة", "زواج", "حج"]
 
@@ -371,7 +423,7 @@ def leave_request(message):
         for t in types_list
     ])
 
-    bot.send_message(message.chat.id, "اختر النوع", reply_markup=markup)
+    bot.send_message(chat_id, "اختر النوع", reply_markup=markup)
 
 
 def show_duration(message):
