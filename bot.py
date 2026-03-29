@@ -234,12 +234,37 @@ def calendar_handler(call):
             user_temp_data.setdefault(chat_id, {})
             user_temp_data[chat_id]["date"] = result.strftime("%Y-%m-%d")
 
-            msg = bot.send_message(chat_id, "اكتب السبب")
-            bot.register_next_step_handler(msg, save_leave_request)
+            # --- NEW LOGIC: Check if hourly vacation ---
+            duration = user_temp_data[chat_id].get("duration")
+            
+            if duration == "ساعية":
+                # Ask for the time range
+                msg = bot.send_message(chat_id, "اكتب وقت الإجازة (مثلاً: 10 ص إلى 2 م)")
+                bot.register_next_step_handler(msg, ask_leave_time)
+            else:
+                # If it's a daily vacation, go straight to the reason
+                msg = bot.send_message(chat_id, "اكتب السبب")
+                bot.register_next_step_handler(msg, save_leave_request)
 
     except Exception:
         logging.exception("Calendar Error")
         bot.send_message(chat_id, "حدث خطأ في اختيار التاريخ")
+
+
+# =====================
+# TIME HANDLER (NEW)
+# =====================
+def ask_leave_time(message):
+    chat_id = message.chat.id
+    time_range = message.text
+
+    # Update the duration to include the hand-typed time range
+    if chat_id in user_temp_data:
+        user_temp_data[chat_id]["duration"] = f"ساعية ({time_range})"
+
+    # Now ask for the reason, just like normal
+    msg = bot.send_message(chat_id, "اكتب السبب")
+    bot.register_next_step_handler(msg, save_leave_request)
 
 
 # =====================
