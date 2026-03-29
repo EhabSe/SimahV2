@@ -1,7 +1,6 @@
 import telebot
 from telebot import types
 import sqlite3
-import pandas as pd
 from datetime import datetime, date
 from telegram_bot_calendar import DetailedTelegramCalendar
 import os
@@ -25,7 +24,7 @@ DB_PATH = "/data/hr_system.db" if os.path.exists("/data") else "hr_system.db"
 user_temp_data = {}
 
 # =====================
-# DATABASE (AUTO FIX)
+# DATABASE
 # =====================
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -54,7 +53,7 @@ def init_db():
     )
     """)
 
-    # 🔥 AUTO ADD COLUMN
+    # ✅ auto add hours_range column
     cursor.execute("PRAGMA table_info(leaves)")
     columns = [col[1] for col in cursor.fetchall()]
 
@@ -64,6 +63,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+
 
 # =====================
 # HELPERS
@@ -147,27 +147,22 @@ def handle_approval(call):
 def callback_handler(call):
     chat_id = call.message.chat.id
 
-    try:
-        if call.data == "add_emp":
-            msg = bot.send_message(chat_id, "أرسل اسم الموظف")
-            bot.register_next_step_handler(msg, ask_emp_id)
+    if call.data == "add_emp":
+        msg = bot.send_message(chat_id, "أرسل اسم الموظف")
+        bot.register_next_step_handler(msg, ask_emp_id)
 
-        elif call.data == "pending":
-            show_pending()
+    elif call.data == "pending":
+        show_pending()
 
-        elif call.data.startswith("type_"):
-            user_temp_data[chat_id]["leave_type"] = call.data.split("_", 1)[1]
-            show_duration(call.message)
+    elif call.data.startswith("type_"):
+        user_temp_data[chat_id]["leave_type"] = call.data.split("_", 1)[1]
+        show_duration(call.message)
 
-        elif call.data.startswith("dur_"):
-            user_temp_data[chat_id]["duration"] = call.data.split("_", 1)[1]
+    elif call.data.startswith("dur_"):
+        user_temp_data[chat_id]["duration"] = call.data.split("_", 1)[1]
 
-            calendar, _ = DetailedTelegramCalendar(min_date=date.today()).build()
-            bot.edit_message_text("اختر التاريخ", chat_id, call.message.message_id, reply_markup=calendar)
-
-    except Exception:
-        logging.exception("Callback Error")
-        bot.send_message(chat_id, "حدث خطأ")
+        calendar, _ = DetailedTelegramCalendar(min_date=date.today()).build()
+        bot.edit_message_text("اختر التاريخ", chat_id, call.message.message_id, reply_markup=calendar)
 
 
 # =====================
@@ -177,25 +172,20 @@ def callback_handler(call):
 def calendar_handler(call):
     chat_id = call.message.chat.id
 
-    try:
-        result, key, step = DetailedTelegramCalendar(min_date=date.today()).process(call.data)
+    result, key, step = DetailedTelegramCalendar(min_date=date.today()).process(call.data)
 
-        if not result and key:
-            bot.edit_message_text(f"اختر {step}", chat_id, call.message.message_id, reply_markup=key)
+    if not result and key:
+        bot.edit_message_text(f"اختر {step}", chat_id, call.message.message_id, reply_markup=key)
 
-        elif result:
-            user_temp_data[chat_id]["date"] = result.strftime("%Y-%m-%d")
+    elif result:
+        user_temp_data[chat_id]["date"] = result.strftime("%Y-%m-%d")
 
-            if user_temp_data[chat_id].get("duration") == "ساعية":
-                msg = bot.send_message(chat_id, "اكتب عدد الساعات (مثال: 10:00 - 14:00)")
-                bot.register_next_step_handler(msg, ask_hours_range)
-            else:
-                msg = bot.send_message(chat_id, "اكتب السبب")
-                bot.register_next_step_handler(msg, save_leave_request)
-
-    except Exception:
-        logging.exception("Calendar Error")
-        bot.send_message(chat_id, "خطأ في التاريخ")
+        if user_temp_data[chat_id].get("duration") == "ساعية":
+            msg = bot.send_message(chat_id, "اكتب نطاق الساعات (مثال: 10:00 - 14:00)")
+            bot.register_next_step_handler(msg, ask_hours_range)
+        else:
+            msg = bot.send_message(chat_id, "اكتب السبب")
+            bot.register_next_step_handler(msg, save_leave_request)
 
 
 # =====================
@@ -218,6 +208,7 @@ def save_leave_request(message):
     reason = message.text
 
     data = user_temp_data.get(chat_id, {})
+    hours_range = data.get("hours_range")
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -232,7 +223,7 @@ def save_leave_request(message):
         data.get("duration"),
         data.get("date"),
         datetime.now().strftime("%H:%M"),
-        data.get("hours_range"),
+        hours_range if data.get("duration") == "ساعية" else None,
         reason,
         "انتظار",
         datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -252,7 +243,7 @@ def save_leave_request(message):
 📌 {data.get('leave_type')}
 ⏱ {data.get('duration')}
 📅 {data.get('date')}
-🕒 {data.get('hours_range') if data.get('duration') == "ساعية" else "—"}
+🕒 {hours_range if data.get('duration') == "ساعية" else "—"}
 📝 {reason}"""
     )
 
@@ -349,7 +340,6 @@ def show_duration(message):
 # =====================
 if __name__ == "__main__":
     init_db()
-    print("Bot running...")
 
     while True:
         try:
