@@ -133,7 +133,7 @@ def handle_approval(call):
     try:
         action, leave_id, emp_id = call.data.split("_")
 
-        status = "مقبول" if action == "approve" else "مرفوض"
+        status = "مقبول" if action == "approve" else "رفض"
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
