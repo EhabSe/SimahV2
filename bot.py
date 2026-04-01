@@ -472,6 +472,7 @@ def show_duration(message):
 if __name__ == "__main__":
     init_db()
     print("Bot is running...")
+    print("DATABASE_URL:", DATABASE_URL)
 
     while True:
         try:
